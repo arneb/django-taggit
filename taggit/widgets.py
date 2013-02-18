@@ -23,14 +23,20 @@ class TagAutocomplete(forms.TextInput):
                 value = value.split(',')
             else:
                 value = []
+        
+        allow_add_attr = self.attrs.pop('allow_add', False)
+        if attrs and 'allow_add' in attrs:
+            allow_add_attr = attrs.pop('allow_add', False)
+        
         html = super(TagAutocomplete, self).render(
             name+"_dummy",
             ",".join(value),
             attrs
         )
-        allow_add = "false"
-        if 'allow_add' in attrs and attrs['allow_add']:
+        if allow_add_attr is True:
             allow_add = "true"
+        else:
+            allow_add = "false"
         js_config = u"""{startText: "%s", \
             preFill: prefill, \
             allowAdd: %s, \
