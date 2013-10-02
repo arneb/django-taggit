@@ -141,7 +141,7 @@ class TaggableManager(RelatedField):
     def extra_filters(self, pieces, pos, negate):
         if negate or not self.use_gfk:
             return []
-        prefix = "__".join(["tagged_items"] + pieces[:pos-2])
+        prefix = "__".join(pieces[:pos] + ["tagged_items"] + pieces[:2*pos-2])
         cts = map(ContentType.objects.get_for_model, _get_subclasses(self.model))
         if len(cts) == 1:
             return [("%s__content_type" % prefix, cts[0])]
