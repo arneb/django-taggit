@@ -1,12 +1,10 @@
-import django
-
 from mock import patch
 
 from nose import tools
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, IntegrityError
 from django.test import TestCase
 
 from taggit.managers import TaggableManager
@@ -43,16 +41,11 @@ class BaseTaggingTest(object):
             settings.DEBUG = original_DEBUG
 
     def _get_form_str(self, form_str):
-        if django.VERSION >= (1, 3):
-            form_str %= {
-                'help_start': '<span class="helptext">',
-                'help_stop': '</span>'
-            }                
-        else:                
-            form_str %= {    
-                'help_start': '',
-                'help_stop': ''
-            }                
+
+        form_str %= {
+            'help_start': '<span class="helptext">',
+            'help_stop': '</span>'
+        }
         return form_str
 
     def assert_form_renders(self, form, html):
@@ -83,8 +76,14 @@ class TagModelTestCase(BaseTaggingTestCase):
         apple = self.food_model.objects.create(name='apple')
         yummy = self.tag_model.objects.create(name='yummy')
         apple.tags.add(yummy)
-        
-    def test_slugify(self):
+
+    def test_add_twice_raises(self):
+        self.tag_model.objects.create(name='apple')
+        tools.assert_raises(IntegrityError, lambda: self.tag_model.objects.create(name='apple'))
+
+    @patch('taggit.managers.settings')
+    def test_slugify(self, mocked_settings):
+        mocked_settings.TAGGIT_FORCE_LOWERCASE = False
         a = Article.objects.create(title='django-taggit 1.0 Released')
         a.tags.add('awesome', 'release', 'AWESOME')
         self.assert_tags_equal(a.tags.all(), [
@@ -164,7 +163,7 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
     def test_set_tag(self):
         banana = self.food_model.objects.create(name='banana')
         pear = self.food_model.objects.create(name='pear')
-         
+
         tag = self.tag_model.objects.create(name='yellow')
         banana.tags.add(tag)
         tag2 = self.tag_model.objects.create(name='slippery')
@@ -185,7 +184,7 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
         banana.tags.set(tag2,tag, 'funny', 'sweet', 'crazy', 'fruit')
         self.assert_tags_equal(banana.tags.all(), ['yellow', 'slippery', 'funny', 'sweet', 'crazy', 'fruit'])
         self.assert_tags_equal(pear.tags.all(), ['yellow', 'slippery'])
-        
+
         # Test that the primary keys in the TaggedItem model are preserved
         tools.assert_equals(banana.tags.through.objects.filter(tag=tag).all()[0].pk, taggeditem_banana_yellow.id)
         tools.assert_equals(banana.tags.through.objects.filter(tag=tag2).all()[0].pk, taggeditem_banana_slippery.id)
@@ -194,8 +193,7 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
 
         banana.tags.set()
         self.assert_tags_equal(banana.tags.all(), [])
-        
-        
+
     def test_add_queries(self):
         apple = self.food_model.objects.create(name="apple")
         #   1 query to see which tags exist
@@ -250,6 +248,10 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
             list(self.food_model.objects.filter(tags__name__in=["green"])),
             [apple, pear]
         )
+        tools.assert_equals(
+            list(self.food_model.objects.filter(tags__name__in = ['green']).filter(tags__name__in = ['red'])),
+            [apple]
+        )
 
         kitty = self.pet_model.objects.create(name="kitty")
         kitty.tags.add("fuzzy", "red")
@@ -270,6 +272,7 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
             set(map(lambda o: o.pk, self.pet_model.objects.filter(tags__name__in=["fuzzy"]))),
             set([kitty.pk, cat.pk])
         )
+        
 
     def test_lookup_bulk(self):
         apple = self.food_model.objects.create(name="apple")
@@ -302,8 +305,8 @@ class TaggableManagerTestCase(BaseTaggingTestCase):
         guava = self.food_model.objects.create(name="guava")
 
         tools.assert_equals(
-            map(lambda o: o.pk, self.food_model.objects.exclude(tags__name__in=["red"])),
-            [pear.pk, guava.pk],
+            set(map(lambda o: o.pk, self.food_model.objects.exclude(tags__name__in=["red"]))),
+            set([pear.pk, guava.pk]),
         )
 
     def test_similarity_by_tag(self):

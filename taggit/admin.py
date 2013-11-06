@@ -6,14 +6,13 @@ from taggit.models import Tag, TaggedItem
 
 def tagged_items_count(obj):
     tagged_items_count = TaggedItem.objects.filter(tag=obj).count()
-    tagged_items_count.short_description = _('Tagged Items Count')
     return tagged_items_count
+tagged_items_count.short_description = _("Tagged Items Count")
 
 
 class TaggedItemInline(admin.StackedInline):
     model = TaggedItem
     extra = 0
-
 
 
 class TagAdmin(admin.ModelAdmin):

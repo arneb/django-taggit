@@ -1,14 +1,10 @@
-from django import VERSION
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.generic import GenericForeignKey
-from django.db import models, transaction, IntegrityError
+from django.db import models, router, transaction, IntegrityError
 from django.db.models.query import QuerySet
 from django.template.defaultfilters import slugify as default_slugify
 from django.utils.translation import ugettext_lazy as _, ugettext
 from django.core.urlresolvers import reverse
-
-
-DJANGO_12 = (VERSION >= (1, 2))
 
 
 class TagBase(models.Model):
@@ -24,17 +20,13 @@ class TagBase(models.Model):
     def save(self, *args, **kwargs):
         if not self.pk and not self.slug:
             self.slug = self.slugify(self.name)
-            if DJANGO_12:
-                from django.db import router
-                using = kwargs.get("using") or router.db_for_write(
-                    type(self), instance=self)
-                # Make sure we write to the same db for all attempted writes,
-                # with a multi-master setup, theoretically we could try to
-                # write and rollback on different DBs
-                kwargs["using"] = using
-                trans_kwargs = {"using": using}
-            else:
-                trans_kwargs = {}
+            using = kwargs.get("using") or router.db_for_write(
+                type(self), instance=self)
+            # Make sure we write to the same db for all attempted writes,
+            # with a multi-master setup, theoretically we could try to
+            # write and rollback on different DBs
+            kwargs["using"] = using
+            trans_kwargs = {"using": using}
             i = 0
             while 1:
                 i += 1
@@ -42,10 +34,14 @@ class TagBase(models.Model):
                     sid = transaction.savepoint(**trans_kwargs)
                     res = super(TagBase, self).save(*args, **kwargs)
                     transaction.savepoint_commit(sid, **trans_kwargs)
-                    return res
-                except IntegrityError:
+                except IntegrityError, e:
+                    if 'slug' not in e.message:
+                        raise
+
                     transaction.savepoint_rollback(sid, **trans_kwargs)
                     self.slug = self.slugify(self.name, i)
+                else:
+                    return res
         else:
             return super(TagBase, self).save(*args, **kwargs)
 
@@ -110,10 +106,7 @@ class ItemBase(models.Model):
 
 
 class TaggedItemBase(ItemBase):
-    if not DJANGO_12:
-        tag = models.ForeignKey(Tag, related_name="%(class)s_items")
-    else:
-        tag = models.ForeignKey(Tag, related_name="%(app_label)s_%(class)s_items")
+    tag = models.ForeignKey(Tag, related_name="%(app_label)s_%(class)s_items")
 
     class Meta:
         abstract = True
@@ -132,10 +125,7 @@ class TaggedItemBase(ItemBase):
 class GenericTaggedItemBase(ItemBase):
     object_id = models.IntegerField(verbose_name=_('Object id'), db_index=True)
 
-    if not DJANGO_12:
-        ct_related_name = "%(class)s_tagged_items"
-    else:
-        ct_related_name="%(app_label)s_%(class)s_tagged_items"
+    ct_related_name = "%(app_label)s_%(class)s_tagged_items"
 
     content_type = models.ForeignKey(
                 ContentType,

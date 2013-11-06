@@ -1,31 +1,54 @@
 from django.contrib.contenttypes.generic import GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
-from django.db.models.fields.related import ManyToManyRel, RelatedField
+from django.db.models.fields.related import ManyToManyRel, RelatedField, \
+    add_lazy_relation
 from django.db.models.related import RelatedObject
-from django.db.models.fields.related import add_lazy_relation
 from django.utils.translation import ugettext_lazy as _
-
 from taggit import settings
 from taggit.forms import TagField
 from taggit.models import TaggedItem, GenericTaggedItemBase
 from taggit.utils import require_instance_manager
 from taggit.widgets import TagAutocomplete
-
-
 try:
-    all
-except NameError:
-    # 2.4 compat
-    try:
-        from django.utils.itercompat import all
-    except ImportError:
-        # 1.1.X compat
-        def all(iterable):
-            for item in iterable:
-                if not item:
-                    return False
-            return True
+    from django.db.models.related import PathInfo
+except ImportError:
+    pass
+
+
+class JoiningObject(object):
+    def __init__(self, model, through, direct):
+        self.model = model
+        self.through = through
+        self.direct = direct
+
+    #This is required because of comparing join fields in
+    #django.db.models.sql.query.Query.join method
+    def __eq__(self, other):
+        return isinstance(other, JoiningObject) and self.model == other.model and self.through == other.through and self.direct == other.direct
+
+    def __ne__(self, other):
+        return not self == other
+
+    #Classes which define custom __eq__, must either also define __hash__
+    #or explicitly mark themselves as unhashable. We do the latter.
+    __hash__ = None
+
+    def get_extra_join_sql(self, connection, qn, lhs_alias, rhs_alias):
+        if self.direct:
+            alias_to_join = rhs_alias
+        else:
+            alias_to_join = lhs_alias
+        extra_col = self.through._meta.get_field_by_name('content_type')[0].column
+        content_type_ids = [ContentType.objects.get_for_model(subclass).pk for subclass in _get_subclasses(self.model)]
+        if len(content_type_ids) == 1:
+            content_type_id = content_type_ids[0]
+            extra_where = " AND %s.%s = %%s" % (qn(alias_to_join), qn(extra_col))
+            params = [content_type_id]
+        else:
+            extra_where = " AND %s.%s IN (%s)" % (qn(alias_to_join), qn(extra_col), ','.join(['%s']*len(content_type_ids)))
+            params = content_type_ids
+        return extra_where, params
 
 
 class TaggableRel(ManyToManyRel):
@@ -83,6 +106,7 @@ class TaggableManager(RelatedField):
                 self.post_through_setup(cls)
 
     def post_through_setup(self, cls):
+        self.related = RelatedObject(cls, self.model, self)
         self.use_gfk = (
             self.through is None or issubclass(self.through, GenericTaggedItemBase)
         )
@@ -104,7 +128,6 @@ class TaggableManager(RelatedField):
             defaults["widget"] = TagAutocomplete
 
         defaults.update(kwargs)
-        
         return form_class(**defaults)
 
     def value_from_object(self, instance):
@@ -117,7 +140,7 @@ class TaggableManager(RelatedField):
 
     def m2m_reverse_name(self):
         return self.through._meta.get_field_by_name("tag")[0].column
-    
+
     def m2m_reverse_field_name(self):
         return self.through._meta.get_field_by_name("tag")[0].name
 
@@ -138,6 +161,10 @@ class TaggableManager(RelatedField):
     def m2m_db_table(self):
         return self.through._meta.db_table
 
+    def bulk_related_objects(self, new_objs, using):
+        return []
+
+    #This method is only used in django <= 1.5
     def extra_filters(self, pieces, pos, negate):
         if negate or not self.use_gfk:
             return []
@@ -147,8 +174,54 @@ class TaggableManager(RelatedField):
             return [("%s__content_type" % prefix, cts[0])]
         return [("%s__content_type__in" % prefix, cts)]
 
-    def bulk_related_objects(self, new_objs, using):
-        return []
+    #This and all the methods till the end of class are only used in django >= 1.6
+    def _get_mm_case_path_info(self, direct=False):
+        pathinfos = []
+        linkfield1 = self.through._meta.get_field_by_name('content_object')[0]
+        linkfield2 = self.through._meta.get_field_by_name(self.m2m_reverse_field_name())[0]
+        if direct:
+            join1infos, _, _, _ = linkfield1.get_reverse_path_info()
+            join2infos, opts, target, final = linkfield2.get_path_info()
+        else:
+            join1infos, _, _, _ = linkfield2.get_reverse_path_info()
+            join2infos, opts, target, final = linkfield1.get_path_info()
+        pathinfos.extend(join1infos)
+        pathinfos.extend(join2infos)
+        return pathinfos, opts, target, final
+
+    def _get_gfk_case_path_info(self, direct=False):
+        pathinfos = []
+        from_field = self.model._meta.pk
+        opts = self.through._meta
+        object_id_field = opts.get_field_by_name('object_id')[0]
+        linkfield = self.through._meta.get_field_by_name(self.m2m_reverse_field_name())[0]
+        if direct:
+            joining_object = JoiningObject(self.model, self.through, True)
+            join1infos = [PathInfo(from_field, object_id_field, self.model._meta, opts, joining_object, True, False)]
+            join2infos, opts, target, final = linkfield.get_path_info()
+        else:
+            joining_object = JoiningObject(self.model, self.through, False)
+            join1infos, _, _, _ = linkfield.get_reverse_path_info()
+            join2infos = [PathInfo(object_id_field, from_field, opts, self.model._meta, joining_object, True, False)]
+            target = from_field
+            final = self
+            opts = self.model._meta
+
+        pathinfos.extend(join1infos)
+        pathinfos.extend(join2infos)
+        return pathinfos, opts, target, final
+
+    def get_path_info(self):
+        if self.use_gfk:
+            return self._get_gfk_case_path_info(direct=True)
+        else:
+            return self._get_mm_case_path_info(direct=True)
+
+    def get_reverse_path_info(self):
+        if self.use_gfk:
+            return self._get_gfk_case_path_info(direct=False)
+        else:
+            return self._get_mm_case_path_info(direct=False)
 
 
 class _TaggableManager(models.Manager):
@@ -196,15 +269,14 @@ class _TaggableManager(models.Manager):
         for tag in obj_tags:
             self.through.objects.get_or_create(tag=tag, **self._lookup_kwargs())
 
-
     @require_instance_manager
     def set(self, *tags):
         have = set(tag.name for tag in self.get_query_set().all())
         wanted = set([tag.name if isinstance(tag, self.through.tag_model()) else tag for tag in tags])
-        
+
         add = wanted - have
         remove = have - wanted
-        
+
         self.add(*list(add))
         self.remove(*list(remove))
 
@@ -236,13 +308,13 @@ class _TaggableManager(models.Manager):
         subq = self.all()
         qs = qs.filter(tag__in=list(subq))
         qs = qs.order_by('-n')
-        
+
         if filters is not None:
             qs = qs.filter(**filters)
-    
+
         if num is not None:
             qs = qs[:num]
-        
+
         # TODO: This all feels like a bit of a hack.
         items = {}
         if len(lookup_keys) == 1:
@@ -273,6 +345,12 @@ class _TaggableManager(models.Manager):
             obj.similar_tags = result["n"]
             results.append(obj)
         return results
+
+    def namespaced(self):
+        return self.get_query_set().exclude(namespace='')
+
+    def non_namespaced(self):
+        return self.get_query_set().filter(namespace='')
 
 
 def _get_subclasses(model):

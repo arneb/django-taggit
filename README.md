@@ -3,14 +3,22 @@ django-taggit
 
 ``django-taggit`` is a simpler approach to tagging with Django.
 
+
+Differences between this fork and original django-taggit
+--------------------------------------------------------
+
+* some bugfixes
+* added ability to have more tag fields for one model
+* dropped support of Django < 1.3
+
+
 Getting Started
 ---------------
 
-You can simply install it with
+This is unofficial fork of django-taggit, you have to install it from github:
 ``pip``::
 
-    $ pip install django-taggit
-
+    $ pip install git+git://github.com/yedpodtrzitko/django-taggit.git
 
 Add ``"taggit"`` to your
 ``INSTALLED_APPS`` then just add a TaggableManager to your model and go::
@@ -54,24 +62,16 @@ English articles to, from, the, of, etc.) add to settings.py:
 Requirements
 ------------
 
-``django-taggit`` requires Django 1.1 or greater.
+This ``django-taggit`` fork requires Django 1.3 or greater.
+
 
 Further Infos
 -------------
 
-For more info checkout out the
-[documentation](http://readthedocs.org/docs/django-taggit/en/latest/).
+For more info about official ``django-taggit``:
+
+you can checkout out the
+[documentation](http://readthedocs.org/docs/django-taggit/en/latest/)
 
 And for questions about usage or development you can contact
-the [mailinglist](http://groups.google.com/group/django-taggit).
-
-Merger's notes
---------------
-
-* Decided to stay with version 0.9.4 changed by shacker.
-* Decided to leave markdown version of README.
-* Decided not to merge forks:
-    * extending base functionality or ones that would lower performance;
-    * being much against PEP-8;
-    * with changes solving specific problems.
-* Combined alex/django-taggit & fcurella/django-taggit-autocomplete by AGoodId (https://github.com/AGoodId/django-taggit).
+the [mailinglist](http://groups.google.com/group/django-taggit)
